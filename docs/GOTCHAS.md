@@ -215,6 +215,12 @@ Advanced settings > Configure filter update, add
 the rest, reboot. The routing tweaks (`detectDNS = false`, `routeIPs`) cannot be set this
 way. `verify.sh` skips the list count there and relies on the blocked-host lookups.
 
+The same wall applies to the launcher's own folder: `home.conf` and the wallpapers
+cannot be pushed to `/sdcard/Android/data/tv.dumbtv.home/files/`. The launcher reads
+them from `/sdcard/Android/media/tv.dumbtv.home/` as well, which adb can write. A
+settings file pushed there is applied once and remembered, so the same push is not
+applied twice and a later change in Options is not overwritten by it.
+
 **HOME does not move to dumbtv home yet.** Android 11 blocks the Guard's alarm-fired
 launch as a background activity start (logcat: `Background activity start ...
 callingUidHasAnyVisibleWindow: false`). The service is bound, so `verify.sh` reports it

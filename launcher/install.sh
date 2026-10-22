@@ -43,6 +43,39 @@ set_futurity() {
   else sh_ settings delete global alarm_manager_constants >/dev/null; fi
 }
 
+# Fire OS 8 (Android 11) refuses to start an activity from the background, and the
+# Guard's swap is exactly that: an alarm fires and asks the system to bring our home
+# to the front while our process is in the background. Android's own switch for it is
+# a DeviceConfig flag; with it off the start is refused and the HOME key silently
+# stays on Amazon's launcher. It is written as a device default so it survives
+# reboots. Android 9 (Fire OS 7) has no such restriction, so this is a no-op there.
+BG_STARTS=default_background_activity_starts_enabled
+set_bg_starts() {
+  case $1 in
+    on)  sh_ cmd device_config put activity_manager "$BG_STARTS" true default >/dev/null 2>&1 || true ;;
+    off) sh_ cmd device_config delete activity_manager "$BG_STARTS" >/dev/null 2>&1 || true ;;
+  esac
+}
+
+# The only proof that matters: press HOME and see which window ends up in front.
+# A bound accessibility service proves nothing about the swap - on Fire OS 8 the
+# swap is refused by the background-activity-start rule even when everything is
+# enabled and bound. Take our own home out of the foreground first: a swap that
+# starts while our activity is still resumed is allowed anyway, and that would
+# hide a missing switch.
+home_lands_here() {
+  local front
+  sh_ am start -a android.intent.action.MAIN -c android.intent.category.LEANBACK_SETTINGS >/dev/null 2>&1 || true
+  sleep 4
+  sh_ input keyevent KEYCODE_HOME >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5 6; do
+    sleep 1
+    front=$(sh_ dumpsys activity activities | grep -m1 mResumedActivity || true)
+    [[ $front == *"$PKG"* ]] && return 0
+  done
+  return 1
+}
+
 # Fire OS 6's `settings` command silently drops writes to enabled_accessibility_services
 # (exit code 0, value unchanged); the settings content provider still takes them.
 put_secure() {
@@ -81,6 +114,7 @@ if [[ $mode == undo ]]; then
   sh_ am force-stop $PKG >/dev/null 2>&1 || true
   sh_ appops set $PKG GET_USAGE_STATS default >/dev/null 2>&1 || true
   set_futurity off
+  set_bg_starts off
   set_guard ""
   sh_ am start -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null
   echo "HOME handed back to Amazon's launcher (dumbtv home stays installed: adb uninstall $PKG)"
@@ -112,7 +146,9 @@ else
   echo "checksum ok"
 fi
 
-out=$(adb_ install -r "$APK" 2>&1 | tail -1 || true)
+# Newer adb prints "Success" before its own timing line, so look at the whole
+# output instead of its last line.
+out=$(adb_ install -r "$APK" 2>&1 || true)
 case $out in
   *Success*) ;;
   *INSTALL_FAILED_UPDATE_INCOMPATIBLE*)
@@ -120,7 +156,7 @@ case $out in
     echo "  back up your settings:  adb pull /sdcard/Android/data/$PKG/files/home.conf" >&2
     echo "  then remove it:         adb uninstall $PKG    and run this again" >&2
     exit 1 ;;
-  *) echo "error: adb install failed: $out" >&2; exit 1 ;;
+  *) echo "error: adb install failed:" >&2; printf '%s\n' "$out" | sed 's/^/  /' >&2; exit 1 ;;
 esac
 echo "installed $PKG"
 
@@ -149,6 +185,8 @@ fi
 
 sh_ cmd package set-home-activity $PKG/.Home >/dev/null 2>&1 || true
 set_futurity on
+# Fire OS 8 aborts the swap's background activity start unless Android's switch is on.
+[[ $dev_sdk -ge 30 ]] && set_bg_starts on
 set_guard $GUARD
 sleep 2
 # The setting alone proves nothing: Fire OS decides whether the service is bound. On
@@ -171,6 +209,7 @@ if [[ $bound == 0 ]]; then
     echo "  remove it with: adb uninstall $PKG" >&2
   fi
   set_futurity off
+  set_bg_starts off
   set_guard ""
   exit 1
 fi
@@ -181,4 +220,17 @@ fi
 
 sleep 2
 printf 'accessibility: %s\n' "$(sh_ settings get secure enabled_accessibility_services)"
+
+# The only proof that matters: press HOME and see which window ends up in front.
+if ! home_lands_here; then
+  front=$(sh_ dumpsys activity activities | grep -m1 mResumedActivity | sed 's/.*u0 //;s/}.*//')
+  echo "error: the HOME key does not reach dumbtv home (front is ${front:-unknown})" >&2
+  if [[ $dev_sdk -ge 30 ]]; then
+    echo "  on Fire OS 8 the swap needs Android's background-activity-start switch:" >&2
+    echo "    adb shell cmd device_config put activity_manager $BG_STARTS true default" >&2
+  fi
+  echo "  launcher/README.md has the details, docs/GOTCHAS.md the recovery table" >&2
+  exit 1
+fi
+printf 'HOME key:      %s\n' "$(sh_ dumpsys activity activities | grep -m1 mResumedActivity | sed 's/.*u0 //;s/}.*//')"
 printf 'front window:  %s\n' "$(sh_ dumpsys window | grep -m1 mCurrentFocus | sed 's/.* u0 //; s/}$//')"

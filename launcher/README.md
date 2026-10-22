@@ -135,6 +135,29 @@ adb push *.jpg /sdcard/Android/data/tv.dumbtv.home/files/wallpapers/
 `morning-coast.jpg` or `night-city.jpg`. Several files for one period take turns on each
 return home. With no file named that way, the period simply picks one image of the folder.
 
+### Fire OS 8: the folder adb cannot reach
+
+On Fire OS 8 (Android 11) `/sdcard/Android/data/<app>` is closed to `adb`: listing,
+reading and pushing all fail with `Permission denied`, so the commands above do
+not work there. The launcher therefore also looks in its own media folder, which
+`adb` can still write:
+
+```
+/sdcard/Android/media/tv.dumbtv.home/home.conf
+/sdcard/Android/media/tv.dumbtv.home/wallpapers/
+```
+
+```sh
+adb shell mkdir -p /sdcard/Android/media/tv.dumbtv.home/wallpapers
+adb push *.jpg /sdcard/Android/media/tv.dumbtv.home/wallpapers/
+adb push home.conf /sdcard/Android/media/tv.dumbtv.home/home.conf
+```
+
+A settings file pushed there is applied once, the next time the home screen comes
+back, and its keys win over the ones the TV has. What was applied is remembered,
+so the same push is not applied twice and a later change in Options is not
+overwritten by it. Wallpapers are read from both folders, in name order.
+
 ## How HOME works on Fire OS
 
 Fire OS 7 has no working "default launcher" setting, and Amazon's launcher is a
@@ -154,6 +177,36 @@ protected package. Three things combine to make HOME land here, measured on this
    the moment Amazon's home appears, and removes it once our window is on screen.
 
 What you see on HOME: the app, then about 0.3 s of black, then this home screen.
+
+### Fire OS 8 (Android 11)
+
+Two things in Android 11 work against a third-party launcher. Both were measured on
+an AFTMA08C15, and both are why the swap happens *after* Amazon's home is on screen
+instead of before it:
+
+1. **A non-privileged app can no longer out-rank Amazon's launcher.** Android caps
+   the intent-filter priority of every app that is not privileged to 0
+   (`ComponentResolver.adjustPriority`), while Amazon's launcher declares HOME with
+   priority 950 and *is* privileged. `cmd package set-home-activity` prints
+   `Success` and is then ignored: the HOME key always resolves to
+   `com.amazon.tv.launcher/.ui.HomeActivity_vNext`. Declaring `android:priority`
+   in the manifest changes nothing — the platform caps it on the device, so the
+   manifest deliberately carries no priority.
+2. **Android refuses to start an activity from the background.** The Guard's swap
+   is exactly that: an alarm fires and asks the system to bring our home to the
+   front while the Guard's process is in the background
+   (`ActivityStarter.shouldAbortBackgroundActivityStart`). The start is refused,
+   so HOME lands on Amazon's home even though the service is bound and the alarm
+   fired — the failure is silent, which is why `install.sh` presses HOME and
+   checks the result instead of trusting the setting.
+
+Android's own switch for the second one is a DeviceConfig flag,
+`activity_manager/default_background_activity_starts_enabled`. `install.sh` sets it
+as a device default so it survives reboots, and `--undo` deletes it again. It is
+the only switch involved: `ActivityOptions.setPendingIntentBackgroundActivityLaunchAllowed`
+cannot replace it — that hidden API only gates a check that is already open, and
+the flag that actually decides (`allowBackgroundActivityStart`) is set by whoever
+*sends* the PendingIntent, not by the app that owns it.
 
 ### Fire OS 6
 

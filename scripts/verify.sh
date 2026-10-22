@@ -84,6 +84,41 @@ else
     # Without it HOME still works, but Amazon's home shows for 5 s first.
     printf '%-10s %-38s %s\n' FAIL home-speed "min_futurity=0 missing; re-run launcher.sh"; fail=1
   fi
+  # A bound accessibility service proves nothing about the swap: press HOME and see
+  # which window ends up in front. Take our own home out of the foreground first -
+  # a swap that starts while our activity is still resumed is allowed anyway, and
+  # that would hide a missing background-activity-start switch.
+  [[ $wake == Awake ]] || { dev 'input keyevent KEYCODE_WAKEUP' >/dev/null 2>&1 || true; sleep 2; }
+  dev 'am start -a android.intent.action.MAIN -c android.intent.category.LEANBACK_SETTINGS' >/dev/null 2>&1 || true
+  sleep 4
+  away=$(dev 'dumpsys activity activities' | grep -m1 mResumedActivity | sed 's/.*u0 //;s/}.*//')
+  home_ok=0
+  if [[ $away == tv.dumbtv.home/* ]]; then
+    printf '%-10s %-38s %s\n' skip home-key "could not leave the home screen; press HOME to check"
+  else
+    dev 'input keyevent KEYCODE_HOME' >/dev/null 2>&1 || true
+    sleep 5
+    landed=$(dev 'dumpsys activity activities' | grep -m1 mResumedActivity | sed 's/.*u0 //;s/}.*//')
+    case $landed in
+      tv.dumbtv.home/*) printf '%-10s %-38s %s\n' ok home-key "HOME lands on $landed"; home_ok=1 ;;
+      *) printf '%-10s %-38s %s\n' FAIL home-key "HOME lands on ${landed:-unknown}"; fail=1 ;;
+    esac
+  fi
+  if [[ $SDK -ge 30 ]]; then
+    # Fire OS 8 (Android 11) refuses background activity starts, and the Guard's swap
+    # is one: an alarm fires and asks for our home while our process is in the
+    # background. Android's own switch has to be on, or HOME stays on Amazon's
+    # launcher while every other check looks fine. Where HOME works without it (a
+    # platform where the resolved HOME is ours) the switch is not needed.
+    bg=$(dev 'cmd device_config get activity_manager default_background_activity_starts_enabled' | tr -d '\r')
+    if [[ $bg == true ]]; then
+      printf '%-10s %-38s %s\n' ok home-bg "background activity starts enabled"
+    elif [[ $home_ok == 1 ]]; then
+      printf '%-10s %-38s %s\n' skip home-bg "switch off, HOME works without it"
+    else
+      printf '%-10s %-38s %s\n' FAIL home-bg "switch off; re-run launcher.sh"; fail=1
+    fi
+  fi
 fi
 
 printf '%-10s %-38s %s\n' packages "" "$(dev 'pm list packages -d' | wc -l | tr -d ' ') disabled"

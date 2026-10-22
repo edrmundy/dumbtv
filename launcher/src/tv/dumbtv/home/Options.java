@@ -67,6 +67,8 @@ public final class Options extends Activity {
         about.setText("Settings file: " + cfg.dir + "/" + Config.FILE
                 + "\nWallpaper: put wallpaper.jpg in that folder, then pick Background › Image file"
                 + "\nSeveral wallpapers: put them in " + Config.WALLPAPERS + "/ and pick a rotation"
+                + "\nOn Fire OS 8 adb cannot reach that folder; use /sdcard/Android/media/"
+                + getPackageName() + "/ instead"
                 + "\nNo internet permission. No tracking, no ads, no accounts.");
         list.addView(about);
 

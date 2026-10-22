@@ -6,10 +6,12 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
@@ -18,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -93,6 +96,11 @@ final class Config {
 
     final File dir;
     private final File file;
+    /** The app's media folder, /sdcard/Android/media/tv.dumbtv.home: adb can write there. */
+    private final File shared;
+    private final File sharedFile;
+    /** What was last applied from the media folder, so the same push is not applied twice. */
+    private final File appliedFile;
     private final Map<String, String> values = new LinkedHashMap<>();
     private long signature = Long.MIN_VALUE;
     private int version;
@@ -107,6 +115,14 @@ final class Config {
         File external = c.getExternalFilesDir(null);
         dir = external != null ? external : c.getFilesDir();
         file = new File(dir, FILE);
+        // Fire OS 8 (Android 11) hides /sdcard/Android/data/<pkg> from adb, so nothing can be
+        // pushed into the app's own folder. The app's media folder is still writable by adb,
+        // so it is used as a second source: wallpapers are read from it, and a settings file
+        // pushed there is merged in when it is newer than the app's own copy.
+        File[] media = c.getExternalMediaDirs();
+        shared = (media != null && media.length > 0 && media[0] != null) ? media[0] : null;
+        sharedFile = shared == null ? null : new File(shared, FILE);
+        appliedFile = new File(dir, FILE + ".applied");
         refresh();
     }
 
@@ -116,41 +132,89 @@ final class Config {
     }
 
     void refresh() {
-        long sig = file.lastModified() * 31 + file.length();
+        long sig = signature();
         if (sig == signature) return;
         signature = sig;
         values.clear();
         if (file.isFile()) read();
+        if (mergeShared()) save();
         version++;
     }
 
+    /** Both files count: a settings file pushed into the media folder has to be noticed too. */
+    private long signature() {
+        long sig = file.lastModified() * 31 + file.length();
+        if (sharedFile != null) sig = sig * 31 + hash(sharedFile);
+        return sig;
+    }
+
+    /** Content hash, so a push is noticed even when it carries an old timestamp. */
+    private static long hash(File f) {
+        if (!f.isFile()) return 0;
+        try (InputStream in = new FileInputStream(f)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return Arrays.hashCode(out.toByteArray());
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Takes the settings from a file pushed into the media folder, the one folder adb can still
+     * write on Fire OS 8. The push is applied once: what was applied is remembered, so the same
+     * file is not applied again and a later change on the TV is not overwritten by it.
+     */
+    private boolean mergeShared() {
+        if (sharedFile == null || !sharedFile.isFile()) return false;
+        Map<String, String> incoming = parse(sharedFile);
+        if (incoming.isEmpty()) return false;
+        if (incoming.equals(parse(appliedFile))) return false;
+        Log.i("dumbtv", "applied " + incoming.size() + " settings from " + sharedFile);
+        values.putAll(incoming);
+        writeSettings(appliedFile, incoming);
+        return true;
+    }
+
     private void read() {
+        values.putAll(parse(file));
+    }
+
+    private static Map<String, String> parse(File f) {
+        Map<String, String> out = new LinkedHashMap<>();
         try (BufferedReader r = new BufferedReader(
-                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
+                new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
             for (String line; (line = r.readLine()) != null; ) {
                 line = line.trim();
                 int eq = line.indexOf('=');
                 if (line.startsWith("#") || eq <= 0) continue;
-                values.put(line.substring(0, eq).trim(), line.substring(eq + 1).trim());
+                out.put(line.substring(0, eq).trim(), line.substring(eq + 1).trim());
             }
         } catch (IOException e) {
-            Log.w("dumbtv", "could not read " + file, e);
+            Log.w("dumbtv", "could not read " + f, e);
         }
+        return out;
     }
 
     private void save() {
-        File tmp = new File(dir, FILE + ".tmp");
+        writeSettings(file, values);
+        signature = signature();
+    }
+
+    private static void writeSettings(File target, Map<String, String> settings) {
+        File tmp = new File(target.getParentFile(), target.getName() + ".tmp");
         try (Writer w = new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8)) {
             w.write("# dumbtv home. Edit on the TV (Options) or here; unknown keys are kept.\n");
-            for (Map.Entry<String, String> e : values.entrySet()) {
+            for (Map.Entry<String, String> e : settings.entrySet()) {
                 w.write(e.getKey() + "=" + e.getValue() + "\n");
             }
         } catch (IOException e) {
             Log.w("dumbtv", "could not write " + tmp, e);
             return;
         }
-        if (!tmp.renameTo(file)) Log.w("dumbtv", "could not replace " + file);
-        signature = file.lastModified() * 31 + file.length();
+        if (!tmp.renameTo(target)) Log.w("dumbtv", "could not replace " + target);
     }
 
     String get(String key, String fallback) {
@@ -267,8 +331,21 @@ final class Config {
 
     List<File> wallpapers() {
         List<File> out = new ArrayList<>();
-        File[] files = new File(dir, WALLPAPERS).listFiles();
-        if (files == null) return out;
+        addPictures(new File(dir, WALLPAPERS), out);
+        if (shared != null) addPictures(new File(shared, WALLPAPERS), out);
+        Collections.sort(out, new Comparator<File>() {
+            @Override
+            public int compare(File a, File b) {
+                int byName = a.getName().compareToIgnoreCase(b.getName());
+                return byName != 0 ? byName : a.getPath().compareTo(b.getPath());
+            }
+        });
+        return out;
+    }
+
+    private static void addPictures(File folder, List<File> out) {
+        File[] files = folder.listFiles();
+        if (files == null) return;
         for (File f : files) {
             String n = f.getName().toLowerCase(Locale.ROOT);
             if (f.isFile() && (n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png")
@@ -276,8 +353,6 @@ final class Config {
                 out.add(f);
             }
         }
-        Collections.sort(out);
-        return out;
     }
 
     File wallpaper() {
@@ -305,6 +380,10 @@ final class Config {
         for (String name : new String[] {"wallpaper.jpg", "wallpaper.png", "wallpaper.webp"}) {
             File f = new File(dir, name);
             if (f.isFile()) return f;
+            if (shared != null) {
+                File s = new File(shared, name);
+                if (s.isFile()) return s;
+            }
         }
         return null;
     }

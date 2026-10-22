@@ -12,20 +12,31 @@ LABEL = 'Service[label=dumbtv home button, feedbackType[FEEDBACK_GENERIC]]'
 
 class VerifyTests(unittest.TestCase):
     def run_verify(self, dump, *, component='tv.dumbtv.home/.Guard', enabled='1',
-                   user='0', launcher='1', dump_code=0, alarms='min_futurity=0'):
+                   user='0', launcher='1', dump_code=0, alarms='min_futurity=0',
+                   sdk='34', bg_starts='true', landed='tv.dumbtv.home/.Home',
+                   away='com.amazon.tv.launcher/.ui.MainSettingsActivity'):
+        def resumed(app):
+            return 'mResumedActivity: ActivityRecord{x u0 ' + app + '}'
         replies = {
-            'getprop ro.build.version.sdk': '34',
-            'dumpsys activity activities': 'mResumedActivity: ActivityRecord{x u0 example.player/.Main}',
-            'dumpsys power': 'mWakefulness=Awake',
-            'settings get global alarm_manager_constants': alarms,
-            'am get-current-user': user,
-            f'settings --user {user} get secure enabled_accessibility_services': component,
-            f'settings --user {user} get secure accessibility_enabled': enabled,
-            'dumpsys accessibility': dump,
-            'pm list packages -d': '',
+            'getprop ro.build.version.sdk': {'out': sdk},
+            # Asked three times: what is in front now, what the check moved to, and
+            # where HOME landed.
+            'dumpsys activity activities': [
+                {'out': resumed('example.player/.Main')},
+                {'out': resumed(away)},
+                {'out': resumed(landed)},
+            ],
+            'dumpsys power': {'out': 'mWakefulness=Awake'},
+            'settings get global alarm_manager_constants': {'out': alarms},
+            'am get-current-user': {'out': user},
+            f'settings --user {user} get secure enabled_accessibility_services': {'out': component},
+            f'settings --user {user} get secure accessibility_enabled': {'out': enabled},
+            'dumpsys accessibility': {'out': dump, 'code': dump_code},
+            'pm list packages -d': {'out': ''},
+            'cmd device_config get activity_manager default_background_activity_starts_enabled': {'out': bg_starts},
+            'am start -a android.intent.action.MAIN -c android.intent.category.LEANBACK_SETTINGS': {'out': ''},
+            'input keyevent KEYCODE_HOME': {'out': ''},
         }
-        replies = {k: {'out': v} for k, v in replies.items()}
-        replies['dumpsys accessibility']['code'] = dump_code
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             data, log = tmp / 'responses.json', tmp / 'calls.jsonl'
