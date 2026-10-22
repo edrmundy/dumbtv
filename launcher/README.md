@@ -136,6 +136,29 @@ adb shell mkdir -p /sdcard/Android/data/tv.dumbtv.home/files/wallpapers
 adb push *.jpg /sdcard/Android/data/tv.dumbtv.home/files/wallpapers/
 ```
 
+### Fire OS 8: where adb can write
+
+On Fire OS 8 (Android 11) `/sdcard/Android/data/<app>` is closed to `adb`: listing,
+reading and pushing all fail with `Permission denied`, so none of the commands above
+work there. The launcher also looks in its own media folder, which `adb` can still
+write:
+
+```
+/sdcard/Android/media/tv.dumbtv.home/home.conf
+/sdcard/Android/media/tv.dumbtv.home/wallpapers/
+```
+
+```sh
+adb shell mkdir -p /sdcard/Android/media/tv.dumbtv.home/wallpapers
+adb push *.jpg /sdcard/Android/media/tv.dumbtv.home/wallpapers/
+adb push home.conf /sdcard/Android/media/tv.dumbtv.home/home.conf
+```
+
+Wallpapers are read from both folders, in name order. A settings file pushed there
+is applied once, the next time the home screen comes back, and wins over what the TV
+has; what was applied is remembered, so the same push is not applied twice and a
+later change in Options is not overwritten by it.
+
 `rotate=daytime` matches wallpapers to the time of day by name: `morning` or `day`
 (06:00 to 13:00), `afternoon` or `evening` (13:00 to 20:00), `night` (the rest), as
 in `morning-coast.jpg`.
