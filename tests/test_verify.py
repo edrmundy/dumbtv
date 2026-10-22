@@ -12,20 +12,30 @@ LABEL = 'Service[label=dumbtv home button, feedbackType[FEEDBACK_GENERIC]]'
 
 class VerifyTests(unittest.TestCase):
     def run_verify(self, dump, *, component='tv.dumbtv.home/.Guard', enabled='1',
-                   user='0', launcher='1', dump_code=0, alarms='min_futurity=0'):
+                   user='0', launcher='1', dump_code=0, alarms='min_futurity=0',
+                   landed='tv.dumbtv.home/.Home',
+                   away='com.amazon.tv.launcher/.ui.MainSettingsActivity'):
+        def resumed(app):
+            return 'mResumedActivity: ActivityRecord{x u0 ' + app + '}'
         replies = {
-            'getprop ro.build.version.sdk': '34',
-            'dumpsys activity activities': 'mResumedActivity: ActivityRecord{x u0 example.player/.Main}',
-            'dumpsys power': 'mWakefulness=Awake',
-            'settings get global alarm_manager_constants': alarms,
-            'am get-current-user': user,
-            f'settings --user {user} get secure enabled_accessibility_services': component,
-            f'settings --user {user} get secure accessibility_enabled': enabled,
-            'dumpsys accessibility': dump,
-            'pm list packages -d': '',
+            'getprop ro.build.version.sdk': {'out': '34'},
+            # Asked three times: what is in front now, what the check moved to, and
+            # where HOME landed.
+            'dumpsys activity activities': [
+                {'out': resumed('example.player/.Main')},
+                {'out': resumed(away)},
+                {'out': resumed(landed)},
+            ],
+            'dumpsys power': {'out': 'mWakefulness=Awake'},
+            'settings get global alarm_manager_constants': {'out': alarms},
+            'am get-current-user': {'out': user},
+            f'settings --user {user} get secure enabled_accessibility_services': {'out': component},
+            f'settings --user {user} get secure accessibility_enabled': {'out': enabled},
+            'dumpsys accessibility': {'out': dump, 'code': dump_code},
+            'pm list packages -d': {'out': ''},
+            'am start -a android.intent.action.MAIN -c android.intent.category.LEANBACK_SETTINGS': {'out': ''},
+            'input keyevent KEYCODE_HOME': {'out': ''},
         }
-        replies = {k: {'out': v} for k, v in replies.items()}
-        replies['dumpsys accessibility']['code'] = dump_code
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             data, log = tmp / 'responses.json', tmp / 'calls.jsonl'
@@ -118,6 +128,26 @@ class VerifyTests(unittest.TestCase):
         result, _ = self.run_verify(self.modern(LABEL), alarms='null')
         self.assertEqual(result.returncode, 1)
         self.assertIn('min_futurity=0 missing', result.stdout)
+
+    def test_home_key_proves_the_takeover(self):
+        result, _ = self.run_verify(self.modern(LABEL))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('ok         home-key', result.stdout)
+        self.assertIn('HOME lands on tv.dumbtv.home/.Home', result.stdout)
+
+    def test_home_key_on_another_launcher_is_a_failure(self):
+        # The service can be bound and the alarm can fire while HOME stays on
+        # Amazon's launcher, so the key itself is the only proof.
+        result, _ = self.run_verify(self.modern(LABEL),
+                                    landed='com.amazon.tv.launcher/.ui.HomeActivity_vNext')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('FAIL       home-key', result.stdout)
+
+    def test_home_key_is_skipped_when_the_home_screen_cannot_be_left(self):
+        # Nothing to prove: the check never got away from our own home.
+        result, _ = self.run_verify(self.modern(LABEL), away='tv.dumbtv.home/.Home')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('skip       home-key', result.stdout)
 
 
 if __name__ == '__main__':
