@@ -603,7 +603,8 @@ public final class Home extends Activity {
         v.setClickable(true);
         v.setOnClickListener(click);
         v.setOnFocusChangeListener((view, has) -> {
-            view.animate().scaleX(has ? 1.06f : 1f).scaleY(has ? 1.06f : 1f).setDuration(110).start();
+            view.animate().scaleX(has ? 1.06f : 1f).scaleY(has ? 1.06f : 1f)
+                    .alpha(has ? 0.6f : 1f).setDuration(110).start();
             if (has) focusBackground(null);
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
