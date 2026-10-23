@@ -17,8 +17,21 @@ final class Ui {
     static final int DIALOG = android.R.style.Theme_DeviceDefault_Dialog_Alert;
     static final Typeface LIGHT = Typeface.create("sans-serif-light", Typeface.NORMAL);
     static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    private static Typeface icons;
 
     private Ui() {}
+
+    /** The bundled Nerd Font subset holding the two UI glyphs; the TV's own fonts have none. */
+    static Typeface icons(Context c) {
+        if (icons == null) {
+            try {
+                icons = Typeface.createFromAsset(c.getAssets(), "dumbtv-icons.ttf");
+            } catch (RuntimeException e) {
+                icons = Typeface.DEFAULT;
+            }
+        }
+        return icons;
+    }
 
     static int dp(Context c, float v) {
         return Math.round(v * c.getResources().getDisplayMetrics().density);

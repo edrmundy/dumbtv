@@ -49,6 +49,12 @@ import java.util.concurrent.Future;
 public final class Home extends Activity {
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+    /** Fraction of the designed app-tile size, so all three steps shrink together. */
+    private static final float TILE_SCALE = 0.75f;
+    /** Match the pill (chips) height. */
+    private static final float CLOCK_SP = 32f;
+    /** Shared top inset so the clock and chips line up along their top edge. */
+    private static final int HEAD_INSET = 6;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -58,11 +64,14 @@ public final class Home extends Activity {
     private TvInputManager tv;
     private int applied = -1, appsGeneration;
     private boolean resumed, landed;
+    private boolean forceFirstAppOnResume;
+    /** Item id of the app tile focused last, so leaving the chips returns there. */
+    private String lastAppId;
     private FrameLayout root;
     private ImageView wall;
     private View shade;
     private View tint;
-    private TextView clock, date;
+    private TextView clock;
     private Row apps, inputs;
     private Tile moving;
     private String wallKey;
@@ -110,6 +119,7 @@ public final class Home extends Activity {
 
     private final class Row {
         final String kind;
+        /** Null when the row has no heading. */
         final TextView title;
         final HorizontalScrollView scroll;
         final LinearLayout strip;
@@ -118,15 +128,14 @@ public final class Home extends Activity {
 
         Row(String kind, String name, LinearLayout parent) {
             this.kind = kind;
-            int edge = dp(56), bleed = dp(14);
-            title = Ui.text(Home.this, 12, Ui.FAINT, Ui.MEDIUM);
-            title.setText(name.toUpperCase(Locale.ROOT));
-            title.setLetterSpacing(0.14f);
-            title.setPadding(edge, dp(20), edge, dp(2));
+            title = name == null ? null : Ui.text(Home.this, 12, Ui.FAINT, Ui.MEDIUM);
+            if (title != null) {
+                title.setText(name.toUpperCase(Locale.ROOT));
+                title.setLetterSpacing(0.14f);
+            }
             strip = new LinearLayout(Home.this);
             strip.setClipChildren(false);
             strip.setClipToPadding(false);
-            strip.setPadding(bleed, dp(12), bleed, dp(8));
             scroll = new HorizontalScrollView(Home.this) {
                 /** Keeps the focused tile centered, except near either end of the row. */
                 @Override
@@ -142,13 +151,24 @@ public final class Home extends Activity {
             scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
             scroll.setClipChildren(false);
             scroll.setClipToPadding(false);
-            scroll.setPadding(edge - bleed, 0, edge - bleed, 0);
             scroll.addView(strip, new FrameLayout.LayoutParams(WRAP, WRAP));
             grid = new Grid(Home.this);
-            grid.setPadding(edge, dp(12), edge, dp(8));
-            parent.addView(title, new LinearLayout.LayoutParams(MATCH, WRAP));
+            inset(edge());
+            if (title != null) parent.addView(title, new LinearLayout.LayoutParams(MATCH, WRAP));
             parent.addView(scroll, new LinearLayout.LayoutParams(MATCH, WRAP));
             parent.addView(grid, new LinearLayout.LayoutParams(MATCH, WRAP));
+        }
+
+        /**
+         * Lays the row out from {@code edge}. The bleed lets a focused tile grow past it into the
+         * screen margin without being clipped.
+         */
+        void inset(int edge) {
+            int bleed = dp(7);
+            if (title != null) title.setPadding(edge, dp(6), edge, 0);
+            strip.setPadding(bleed, dp(6), bleed, dp(4));
+            scroll.setPadding(edge - bleed, 0, edge - bleed, 0);
+            grid.setPadding(edge, dp(6), edge, dp(4));
         }
 
         /** Whichever container currently holds the tiles, following Options › Layout. */
@@ -158,7 +178,7 @@ public final class Home extends Activity {
 
         void setVisible(boolean on) {
             boolean gridMode = "grid".equals(cfg.get(Config.LAYOUT));
-            title.setVisibility(on ? View.VISIBLE : View.GONE);
+            if (title != null) title.setVisibility(on ? View.VISIBLE : View.GONE);
             scroll.setVisibility(on && !gridMode ? View.VISIBLE : View.GONE);
             grid.setVisibility(on && gridMode ? View.VISIBLE : View.GONE);
         }
@@ -228,6 +248,20 @@ public final class Home extends Activity {
     @Override
     public void onEnterAnimationComplete() {
         Guard.shown();
+    }
+
+    /**
+     * Options and Settings are activities: a focus request made in onResume lands before this
+     * window regains focus, and is dropped again. Apply it here instead, once the window is
+     * focused and any re-render they caused has finished.
+     */
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && forceFirstAppOnResume) {
+            forceFirstAppOnResume = false;
+            focusFirst();
+        }
     }
 
     @Override
@@ -309,7 +343,7 @@ public final class Home extends Activity {
         if (code == KeyEvent.KEYCODE_MENU) {
             View f = getCurrentFocus();
             if (f instanceof Tile) menu((Tile) f);
-            else startActivity(new Intent(this, Options.class));
+            else { forceFirstAppOnResume = true; startActivity(new Intent(this, Options.class)); }
             return true;
         }
         return super.onKeyDown(code, e);
@@ -333,22 +367,25 @@ public final class Home extends Activity {
 
     /**
      * Title top and strip bottom of each visible row, in {@code content}'s coordinates. In grid
-     * mode every line of tiles is its own block (the first one starting at the row title), so
-     * a grid taller than the screen still scrolls a whole line at a time.
+     * mode every line of tiles is its own block (the first one starting at the row title, or at
+     * the grid when the row has no heading), so a grid taller than the screen still scrolls a
+     * whole line at a time.
      */
     private List<int[]> rowBlocks(View content) {
         List<int[]> rows = new ArrayList<>();
-        for (Row row : new Row[] {apps, inputs}) {
+        for (Row row : new Row[] {inputs, apps}) {
             if (row.scroll.getVisibility() == View.VISIBLE) {
-                rows.add(new int[] {topIn(row.title, content), topIn(row.scroll, content) + row.scroll.getHeight()});
+                int start = row.title != null ? topIn(row.title, content) : topIn(row.scroll, content);
+                rows.add(new int[] {start, topIn(row.scroll, content) + row.scroll.getHeight()});
             } else if (row.grid.getVisibility() == View.VISIBLE) {
                 int gridTop = topIn(row.grid, content), lastTop = Integer.MIN_VALUE;
+                int first = row.title != null ? topIn(row.title, content) : gridTop;
                 for (int i = 0; i < row.grid.getChildCount(); i++) {
                     View t = row.grid.getChildAt(i);
                     if (t.getTop() == lastTop) continue;
-                    int start = lastTop == Integer.MIN_VALUE ? topIn(row.title, content) : gridTop + t.getTop() - dp(12);
+                    int start = lastTop == Integer.MIN_VALUE ? first : gridTop + t.getTop() - dp(6);
                     lastTop = t.getTop();
-                    rows.add(new int[] {start, gridTop + t.getBottom() + dp(8)});
+                    rows.add(new int[] {start, gridTop + t.getBottom() + dp(4)});
                 }
             }
         }
@@ -371,7 +408,10 @@ public final class Home extends Activity {
     private void fitBottom(ScrollView page) {
         View content = page.getChildAt(0);
         if (content == null || page.getHeight() == 0) return;
-        int base = dp(32), height = page.getHeight();
+        // Keep this in step with the column padding set in build(). A tile that can carry a label
+        // reserves that height itself, so measuring from the row edge keeps the same margin with
+        // names on or off.
+        int base = dp(19.5f), height = page.getHeight();
         int natural = content.getHeight() - content.getPaddingBottom() + base;
         int want = base;
         if (natural > height) {
@@ -447,7 +487,8 @@ public final class Home extends Activity {
             @Override
             public View focusSearch(View focused, int direction) {
                 if (direction == View.FOCUS_DOWN && chips.contains(focused)) {
-                    View below = nearest(apps.tiles(), focused);
+                    View below = lastApp(apps.tiles());
+                    if (below == null) below = apps.tiles().getChildAt(0);
                     if (below != null) return below;
                 }
                 return super.focusSearch(focused, direction);
@@ -456,64 +497,54 @@ public final class Home extends Activity {
         column.setOrientation(LinearLayout.VERTICAL);
         column.setClipChildren(false);
         column.setClipToPadding(false);
-        column.setPadding(0, dp(40), 0, dp(32));
+        // The focused tile scales 1.08× and grows further sideways than down; rows start a little
+        // further in than the clock so the focused first tile lines up with it, and keep a small
+        // margin under the last row, whose labels (if shown) sit inside the tile.
+        column.setPadding(0, dp(20), 0, 0);
         scroll.addView(column, new FrameLayout.LayoutParams(MATCH, WRAP));
 
         LinearLayout head = new LinearLayout(this);
         head.setGravity(Gravity.TOP);
-        head.setPadding(dp(56), 0, dp(56), dp(12));
+        head.setPadding(dp(28), 0, dp(28), dp(6));
+        // Chips scale up when focused; clipToPadding would cut the right-hand one at the padding edge.
+        head.setClipChildren(false);
+        head.setClipToPadding(false);
         LinearLayout when = new LinearLayout(this);
         when.setOrientation(LinearLayout.VERTICAL);
-        clock = Ui.text(this, 52, Ui.TEXT, Ui.LIGHT);
-        date = Ui.text(this, 15, Ui.MUTED, Ui.MEDIUM);
-        date.setPadding(dp(2), dp(8), 0, 0);
+        clock = Ui.text(this, CLOCK_SP, Ui.TEXT, Ui.MEDIUM);
+        clock.setPadding(0, dp(HEAD_INSET), 0, 0);
         when.addView(clock);
-        when.addView(date);
         head.addView(when, new LinearLayout.LayoutParams(0, WRAP, 1f));
-        head.addView(chip("Options", v -> startActivity(new Intent(this, Options.class))));
-        head.addView(chip("Settings", v -> openSettings()));
+        head.addView(chip("\uF1DE", "Options", v -> { forceFirstAppOnResume = true; startActivity(new Intent(this, Options.class)); }));
+        head.addView(chip("\uF013", "Settings", v -> { forceFirstAppOnResume = true; openSettings(); }));
         column.addView(head, new LinearLayout.LayoutParams(MATCH, WRAP));
 
-        apps = new Row(Catalog.APPS, "Apps", column);
+        // Keeps the inputs and apps rows at the bottom of the screen, apps last.
+        column.addView(new View(this), new LinearLayout.LayoutParams(MATCH, 0, 1f));
         inputs = new Row(Catalog.INPUTS, "Inputs", column);
+        apps = new Row(Catalog.APPS, null, column);
         return root;
     }
 
     /**
-     * The child of {@code strip} horizontally closest to {@code from}, restricted to its top
-     * visual row so a wrapped grid does not match a tile several rows further down.
+     * The app tile the owner last focused, so leaving the chips comes back to it rather than to
+     * whichever tile happens to sit under the chip.
      */
-    private static View nearest(ViewGroup strip, View from) {
-        int n = strip.getChildCount();
-        if (n == 0) return null;
-        int[] at = new int[2];
-        from.getLocationOnScreen(at);
-        int x = at[0] + from.getWidth() / 2;
-        int[] ys = new int[n];
-        int topY = Integer.MAX_VALUE;
-        for (int i = 0; i < n; i++) {
-            strip.getChildAt(i).getLocationOnScreen(at);
-            ys[i] = at[1];
-            topY = Math.min(topY, at[1]);
-        }
-        View best = null;
-        int bestGap = Integer.MAX_VALUE;
-        for (int i = 0; i < n; i++) {
-            if (ys[i] != topY) continue;
-            View c = strip.getChildAt(i);
-            c.getLocationOnScreen(at);
-            int gap = Math.abs(at[0] + c.getWidth() / 2 - x);
-            if (gap < bestGap) {
-                bestGap = gap;
-                best = c;
+    private View lastApp(ViewGroup tiles) {
+        if (lastAppId != null) {
+            for (int i = 0; i < tiles.getChildCount(); i++) {
+                View v = tiles.getChildAt(i);
+                if (v instanceof Tile && lastAppId.equals(((Tile) v).item.id)) return v;
             }
         }
-        return best;
+        return null;
     }
 
-    private TextView chip(String label, View.OnClickListener click) {
-        TextView v = Ui.text(this, 14, Ui.TEXT, Ui.MEDIUM);
-        v.setText(label);
+    private TextView chip(String glyph, String label, View.OnClickListener click) {
+        TextView v = Ui.text(this, 20, Ui.TEXT, Ui.MEDIUM);
+        v.setTypeface(Ui.icons(this));
+        v.setText(glyph);
+        v.setContentDescription(label);
         v.setGravity(Gravity.CENTER);
         v.setPadding(dp(18), dp(9), dp(18), dp(9));
         v.setFocusable(true);
@@ -525,7 +556,7 @@ public final class Home extends Activity {
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
         lp.leftMargin = dp(10);
-        lp.topMargin = dp(6);
+        lp.topMargin = dp(HEAD_INSET);
         v.setLayoutParams(lp);
         chips.add(v);
         return v;
@@ -553,6 +584,7 @@ public final class Home extends Activity {
                         if (old.id.equals(fresh.id) && !old.id.equals(changed) && old.artRequested) {
                             fresh.banner = old.banner;
                             fresh.icon = old.icon;
+                            fresh.wideIcon = old.wideIcon;
                             fresh.artRequested = true;
                             fresh.backgroundColor = old.backgroundColor;
                         }
@@ -571,6 +603,7 @@ public final class Home extends Activity {
 
     private void render(Row row) {
         if (moving != null && moving.kind.equals(row.kind)) stopMoving();
+        row.inset(edge());
         View focused = getCurrentFocus();
         String keep = focused instanceof Tile && ((Tile) focused).kind.equals(row.kind)
                 ? ((Tile) focused).item.id : null;
@@ -590,7 +623,12 @@ public final class Home extends Activity {
             Tile t = new Tile(this, it, row.kind, Catalog.label(cfg, it), w, h, labels, accent);
             t.setOnClickListener(v -> open((Tile) v));
             t.setOnFocusChangeListener((v, has) -> {
-                if (has) focusBackground(((Tile) v).item);
+                if (has) {
+                    if (Catalog.APPS.equals(((Tile) v).kind)) {
+                        lastAppId = ((Tile) v).item.id;
+                    }
+                    focusBackground(((Tile) v).item);
+                }
             });
             t.setOnLongClickListener(v -> {
                 menu((Tile) v);
@@ -678,14 +716,25 @@ public final class Home extends Activity {
     }
 
     private int[] cardSize() {
+        // The three steps were designed at these sizes; 0.75 makes every app tile a quarter
+        // smaller without changing the gaps, the labels or the grid's column maths.
         switch (cfg.get(Config.TILES)) {
             case "small":
-                return new int[] {dp(144), dp(81)};
+                return new int[] {dp(144 * TILE_SCALE), dp(81 * TILE_SCALE)};
             case "large":
-                return new int[] {dp(224), dp(126)};
+                return new int[] {dp(224 * TILE_SCALE), dp(126 * TILE_SCALE)};
             default:
-                return new int[] {dp(180), dp(101)};
+                return new int[] {dp(180 * TILE_SCALE), dp(101 * TILE_SCALE)};
         }
+    }
+
+    /**
+     * Left edge of a row. A focused tile grows by half its scale-up on each side, so starting the
+     * row that much further in puts the focused first tile — the one HOME lands on — on the same
+     * line as the clock. Unfocused, it clears the clock by the same small amount.
+     */
+    private int edge() {
+        return dp(28) + Math.round(cardSize()[0] * (Tile.FOCUS_SCALE - 1f) / 2f);
     }
 
     private void focusFirst() {
@@ -710,8 +759,6 @@ public final class Home extends Activity {
             clock.setText(DateFormat.format("h:mm", now));
             clock.append(half);
         }
-        Locale locale = Locale.getDefault();
-        date.setText(DateFormat.format(DateFormat.getBestDateTimePattern(locale, "EEEEdMMMM"), now));
         // hourly and time-of-day rotations change while the screen stays open; a no-op otherwise
         background();
     }

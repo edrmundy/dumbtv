@@ -14,6 +14,10 @@ A home screen for Fire TV that does one job: show your apps and your HDMI inputs
   order, boot completed), each limited to Android 8.1 and earlier, for the Fire OS 6
   Keeper below. Check: `aapt2 dump permissions dumbtv-home.apk`.
 - **No ads, no recommended rows, no account, no analytics, no update checks.**
+- **Two icon buttons.** Options (sliders) and Settings (gear), from a 1.4 KB
+  subset of Nerd Fonts' Symbols font (OFL 1.1; licence in
+  `assets/NerdFonts-LICENSE.txt`). The TV's own fonts have no such glyphs, so the
+  subset is bundled.
 - About 60–70 MB of memory with the home screen showing, about 37 MB while an app
   plays (measured on a Fire TV Edition television with 1.4 GB of RAM).
 
