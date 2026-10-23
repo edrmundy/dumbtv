@@ -68,9 +68,15 @@ final class Config {
     static final Choice LABELS = new Choice("labels", "App names", "focus",
             new String[] {"focus", "always", "never"},
             new String[] {"On focus", "Always", "Never"});
-    static final Choice CLOCK = new Choice("clock", "Clock", "auto",
+    static final Choice CLOCK = new Choice("clock", "Clock format", "auto",
             new String[] {"auto", "24h", "12h"},
             new String[] {"System", "24-hour", "12-hour"});
+    static final Choice CLOCKDATE = new Choice("clockdate", "Clock display", "both",
+            new String[] {"both", "clock", "none"},
+            new String[] {"Clock and date", "Clock only", "None"});
+    static final Choice SAVER = new Choice("saver", "Screen saver", "off",
+            new String[] {"off", "1", "5", "15", "30", "60"},
+            new String[] {"Off", "1 minute", "5 minutes", "15 minutes", "30 minutes", "1 hour"});
     static final Choice INPUTS = new Choice("inputs", "Inputs row", "on",
             new String[] {"on", "off"},
             new String[] {"Shown", "Hidden"});
@@ -88,7 +94,7 @@ final class Config {
             new String[] {"off", "visit", "hourly", "daily", "daytime"},
             new String[] {"Off", "Every return home", "Every hour", "Every day", "By time of day"});
 
-    static final Choice[] CHOICES = {ACCENT, TILES, LAYOUT, LABELS, CLOCK, INPUTS, SWITCH, BACKGROUND, DIM, ROTATE};
+    static final Choice[] CHOICES = {ACCENT, TILES, LAYOUT, LABELS, CLOCK, CLOCKDATE, SAVER, INPUTS, SWITCH, BACKGROUND, DIM, ROTATE};
 
     /** Folder of wallpapers, next to home.conf, that Background › Image file rotates through. */
     static final String WALLPAPERS = "wallpapers";

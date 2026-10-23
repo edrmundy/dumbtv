@@ -72,6 +72,13 @@ public final class Home extends Activity {
     private View shade;
     private View tint;
     private TextView clock;
+    private TextView date;
+    private FrameLayout saver;
+    private TextView saverClock;
+    private TextView saverDate;
+    private boolean saverShown;
+    private boolean wakingSaver;
+    private View focusBeforeSaver;
     private Row apps, inputs;
     private Tile moving;
     private String wallKey;
@@ -79,6 +86,10 @@ public final class Home extends Activity {
     private ValueAnimator colorAnimation;
     private int displayedColor, targetColor;
     private boolean tintWallpaper;
+
+    private final Runnable saverTask = () -> {
+        if (resumed && !saverShown) showSaver();
+    };
 
     private final BroadcastReceiver packages = new BroadcastReceiver() {
         @Override
@@ -243,6 +254,7 @@ public final class Home extends Activity {
         f.addAction(Intent.ACTION_TIMEZONE_CHANGED);
         registerReceiver(time, f);
         tick();
+        scheduleSaver();
     }
 
     @Override
@@ -268,6 +280,9 @@ public final class Home extends Activity {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        ui.removeCallbacks(saverTask);
+        hideSaver(false);
+        wakingSaver = false;
         stopColorAnimation();
         targetColor = 0;
         unregisterReceiver(time);
@@ -276,6 +291,7 @@ public final class Home extends Activity {
 
     @Override
     protected void onDestroy() {
+        ui.removeCallbacks(saverTask);
         unregisterReceiver(packages);
         if (tv != null) tv.unregisterCallback(inputWatch);
         io.shutdownNow();
@@ -314,6 +330,15 @@ public final class Home extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
+        if (saverShown || wakingSaver) {
+            if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                if (saverShown) hideSaver();
+                wakingSaver = true;
+            } else if (e.getAction() == KeyEvent.ACTION_UP) {
+                wakingSaver = false;
+            }
+            return true;
+        }
         if (moving == null) return super.dispatchKeyEvent(e);
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             switch (e.getKeyCode()) {
@@ -336,6 +361,12 @@ public final class Home extends Activity {
             }
         }
         return true;
+    }
+
+    @Override
+    public void onUserInteraction() {
+        super.onUserInteraction();
+        if (!saverShown) scheduleSaver();
     }
 
     @Override
@@ -510,10 +541,13 @@ public final class Home extends Activity {
         head.setClipChildren(false);
         head.setClipToPadding(false);
         LinearLayout when = new LinearLayout(this);
-        when.setOrientation(LinearLayout.VERTICAL);
-        clock = Ui.text(this, CLOCK_SP, Ui.TEXT, Ui.MEDIUM);
+        when.setOrientation(LinearLayout.HORIZONTAL);
+        clock = Ui.text(this, CLOCK_SP, Ui.MUTED, Ui.font(this));
         clock.setPadding(0, dp(HEAD_INSET), 0, 0);
         when.addView(clock);
+        date = Ui.text(this, 18, Ui.MUTED, Ui.font(this));
+        date.setPadding(dp(14), 0, 0, 0);
+        when.addView(date);
         head.addView(when, new LinearLayout.LayoutParams(0, WRAP, 1f));
         head.addView(chip("\uF1DE", "Options", v -> { forceFirstAppOnResume = true; startActivity(new Intent(this, Options.class)); }));
         head.addView(chip("\uF013", "Settings", v -> { forceFirstAppOnResume = true; openSettings(); }));
@@ -523,6 +557,25 @@ public final class Home extends Activity {
         column.addView(new View(this), new LinearLayout.LayoutParams(MATCH, 0, 1f));
         inputs = new Row(Catalog.INPUTS, "Inputs", column);
         apps = new Row(Catalog.APPS, null, column);
+
+        saver = new FrameLayout(this);
+        saver.setBackgroundColor(Color.BLACK);
+        saver.setFocusable(true);
+        saver.setClickable(true);
+        saver.setOnClickListener(v -> hideSaver());
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        saverClock = Ui.text(this, 64, Ui.MUTED, Ui.font(this));
+        saverClock.setGravity(Gravity.CENTER);
+        saverDate = Ui.text(this, 24, Ui.MUTED, Ui.font(this));
+        saverDate.setGravity(Gravity.CENTER);
+        saverDate.setPadding(0, dp(10), 0, 0);
+        box.addView(saverClock);
+        box.addView(saverDate);
+        saver.addView(box, new FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER));
+        saver.setVisibility(View.GONE);
+        root.addView(saver, new FrameLayout.LayoutParams(MATCH, MATCH));
         return root;
     }
 
@@ -541,8 +594,7 @@ public final class Home extends Activity {
     }
 
     private TextView chip(String glyph, String label, View.OnClickListener click) {
-        TextView v = Ui.text(this, 20, Ui.TEXT, Ui.MEDIUM);
-        v.setTypeface(Ui.icons(this));
+        TextView v = Ui.text(this, 18, Ui.TEXT, Ui.icons(this));
         v.setText(glyph);
         v.setContentDescription(label);
         v.setGravity(Gravity.CENTER);
@@ -565,11 +617,12 @@ public final class Home extends Activity {
     private void apply() {
         applied = cfg.version();
         int accent = cfg.accent();
-        for (TextView c : chips) Ui.focusStyle(c, accent, 0x14FFFFFF, dp(18));
+        for (TextView c : chips) Ui.focusStyle(c, accent, 0x0AFFFFFF, dp(18));
         render(apps);
         render(inputs);
         background();
         tick();
+        scheduleSaver();
     }
 
     /** Rebuilds the app list, keeping loaded art for every package except {@code changed}. */
@@ -748,19 +801,81 @@ public final class Home extends Activity {
     }
 
     private void tick() {
+        Date now = new Date();
+        showTime(clock, now);
+        showTime(saverClock, now);
+        String day = DateFormat.format("EEEE, d MMMM", now).toString();
+        date.setText(day);
+        saverDate.setText(day);
+        String mode = cfg.get(Config.CLOCKDATE);
+        clock.setVisibility("none".equals(mode) ? View.GONE : View.VISIBLE);
+        date.setVisibility("both".equals(mode) ? View.VISIBLE : View.GONE);
+        saverClock.setVisibility("none".equals(mode) ? View.GONE : View.VISIBLE);
+        saverDate.setVisibility("both".equals(mode) ? View.VISIBLE : View.GONE);
+        // hourly and time-of-day rotations change while the screen stays open; a no-op otherwise
+        background();
+    }
+
+    /** The clock in the current format; the 12-hour suffix is smaller than the digits. */
+    private void showTime(TextView view, Date now) {
         String mode = cfg.get(Config.CLOCK);
         boolean h24 = "24h".equals(mode) || "auto".equals(mode) && DateFormat.is24HourFormat(this);
-        Date now = new Date();
         if (h24) {
-            clock.setText(DateFormat.format("HH:mm", now));
+            view.setText(DateFormat.format("HH:mm", now));
         } else {
             SpannableString half = new SpannableString(" " + DateFormat.format("a", now));
             half.setSpan(new RelativeSizeSpan(0.36f), 0, half.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            clock.setText(DateFormat.format("h:mm", now));
-            clock.append(half);
+            view.setText(DateFormat.format("h:mm", now));
+            view.append(half);
         }
-        // hourly and time-of-day rotations change while the screen stays open; a no-op otherwise
-        background();
+    }
+
+    private int saverMinutes() {
+        try {
+            return Integer.parseInt(cfg.get(Config.SAVER));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private void scheduleSaver() {
+        ui.removeCallbacks(saverTask);
+        int minutes = saverMinutes();
+        if (!resumed || saverShown || minutes <= 0) return;
+        ui.postDelayed(saverTask, minutes * 60_000L);
+    }
+
+    private void showSaver() {
+        if (saverShown || saver == null) return;
+        saverShown = true;
+        focusBeforeSaver = getCurrentFocus();
+        saver.setAlpha(0f);
+        saver.setVisibility(View.VISIBLE);
+        saver.animate().alpha(1f).setDuration(500).start();
+        saver.requestFocus();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    private void hideSaver() {
+        hideSaver(true);
+        scheduleSaver();
+    }
+
+    private void hideSaver(boolean restoreFocus) {
+        if (!saverShown) return;
+        saverShown = false;
+        saver.animate().cancel();
+        saver.setAlpha(1f);
+        saver.setVisibility(View.GONE);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (restoreFocus) {
+            if (focusBeforeSaver != null && focusBeforeSaver.isAttachedToWindow()) {
+                focusBeforeSaver.requestFocus();
+            } else {
+                focusFirst();
+            }
+        }
+        focusBeforeSaver = null;
     }
 
     private void background() {

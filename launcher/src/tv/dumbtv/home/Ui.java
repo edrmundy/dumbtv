@@ -17,20 +17,27 @@ final class Ui {
     static final int DIALOG = android.R.style.Theme_DeviceDefault_Dialog_Alert;
     static final Typeface LIGHT = Typeface.create("sans-serif-light", Typeface.NORMAL);
     static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
-    private static Typeface icons;
+    private static Typeface font;
 
     private Ui() {}
 
-    /** The bundled Nerd Font subset holding the two UI glyphs; the TV's own fonts have none. */
-    static Typeface icons(Context c) {
-        if (icons == null) {
+    /**
+     * The bundled Ubuntu Nerd Font subset: the clock, the date and the two UI glyphs. The TV's
+     * own fonts have no Nerd Font glyphs, and this keeps the text and the icons in one family.
+     */
+    static Typeface font(Context c) {
+        if (font == null) {
             try {
-                icons = Typeface.createFromAsset(c.getAssets(), "dumbtv-icons.ttf");
+                font = Typeface.createFromAsset(c.getAssets(), "dumbtv-font.ttf");
             } catch (RuntimeException e) {
-                icons = Typeface.DEFAULT;
+                font = Typeface.DEFAULT;
             }
         }
-        return icons;
+        return font;
+    }
+
+    static Typeface icons(Context c) {
+        return font(c);
     }
 
     static int dp(Context c, float v) {
@@ -66,6 +73,6 @@ final class Ui {
         v.setBackground(bg);
         v.setTextColor(new ColorStateList(
                 new int[][] {{android.R.attr.state_focused}, {}},
-                new int[] {ink(accent), 0xD9FFFFFF}));
+                new int[] {ink(accent), MUTED}));
     }
 }

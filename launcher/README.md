@@ -14,10 +14,10 @@ A home screen for Fire TV that does one job: show your apps and your HDMI inputs
   order, boot completed), each limited to Android 8.1 and earlier, for the Fire OS 6
   Keeper below. Check: `aapt2 dump permissions dumbtv-home.apk`.
 - **No ads, no recommended rows, no account, no analytics, no update checks.**
-- **Two icon buttons.** Options (sliders) and Settings (gear), from a 1.4 KB
-  subset of Nerd Fonts' Symbols font (OFL 1.1; licence in
-  `assets/NerdFonts-LICENSE.txt`). The TV's own fonts have no such glyphs, so the
-  subset is bundled.
+- **One font family.** Options (sliders) and Settings (gear), the clock and the date
+  use a 51 KB subset of Ubuntu Nerd Font Regular, bundled as `assets/dumbtv-font.ttf`.
+  The TV's own fonts have no Nerd Font glyphs, so the subset is bundled. Ubuntu Font
+  Licence 1.0 and Nerd Fonts' licences are in `assets/`.
 - About 60–70 MB of memory with the home screen showing, about 37 MB while an app
   plays (measured on a Fire TV Edition television with 1.4 GB of RAM).
 
@@ -59,7 +59,9 @@ Undo: `./launcher/install.sh --undo` gives HOME back to Amazon's launcher.
 | Tiles | small, medium, large |
 | Layout | rows, or a grid that wraps to as many columns as fit |
 | App names | on focus, always, never |
-| Clock | system, 24-hour, 12-hour |
+| Clock format | system, 24-hour, 12-hour |
+| Clock display | clock and date, clock only, none |
+| Screen saver | off, or a dim clock after 1, 5, 15, 30 or 60 minutes |
 | Inputs row | shown, hidden |
 | Open inputs with | Automatic, the TV's app, dumbtv home (see below) |
 | Background | black, graphite, midnight, image, adaptive, adaptive tint |
@@ -68,6 +70,10 @@ Undo: `./launcher/install.sh --undo` gives HOME back to Amazon's launcher.
 Below them: Next wallpaper, which apps and inputs appear on the home screen, a
 reset for order, names and hidden tiles, and **Open Amazon's home screen**. Apps
 without a TV banner, like the Appstore, start hidden; tick them to add them.
+
+**Clock display** puts the date beside the clock and hides it with the clock when set
+to none. **Screen saver** fades to a dim clock and date over black after the chosen
+idle time; any remote key wakes it and returns to the tile that was focused.
 
 | Grid layout | Adaptive background | Adaptive tint |
 |---|---|---|
@@ -106,6 +112,10 @@ layout=rows
 labels=focus
 # auto 24h 12h
 clock=auto
+# both clock none
+clockdate=both
+# off 1 5 15 30 60 (minutes)
+saver=off
 # on off
 inputs=on
 # auto tv home

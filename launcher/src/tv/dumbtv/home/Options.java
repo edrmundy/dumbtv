@@ -119,7 +119,8 @@ public final class Options extends Activity {
             boolean off = (c == Config.DIM || c == Config.ROTATE)
                     && !"image".equals(cfg.get(Config.BACKGROUND))
                     && !"adaptive-tint".equals(cfg.get(Config.BACKGROUND))
-                    || c == Config.SWITCH && "off".equals(cfg.get(Config.INPUTS));
+                    || c == Config.SWITCH && "off".equals(cfg.get(Config.INPUTS))
+                    || c == Config.CLOCK && "none".equals(cfg.get(Config.CLOCKDATE));
             row.setAlpha(off ? 0.4f : 1f);
         };
         row.setOnFocusChangeListener((v, has) -> show.run());
